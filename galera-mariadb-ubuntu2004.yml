@@ -1,0 +1,171 @@
+# galera-mariadb-ubuntu2004.yml
+---
+ #########################################
+ # Executa em todos os Server do Cluster
+ ######################################### 
+- hosts: galeracluster  
+  become: true
+  vars:
+    mysql_root_password: "Password1"    
+  tasks:
+                  
+      - name: Update
+        apt: update_cache=yes   
+        ignore_errors: yes  
+      
+      - name: Instalando software utilitarios
+        apt: name=software-properties-common state=latest
+      
+      - name: Adicionando repositorio MariaDB
+        apt_repository:
+          repo: deb http://archive.ubuntu.com/ubuntu bionic main
+          state: present
+      
+      - name: Instalando pymysql
+        apt: name=python3-mysqldb state=latest
+             
+      - name: Instalando MariaDB Server
+        apt: name=mariadb-server state=latest
+        
+      - name: Instalando MariaDB Client
+        apt: name=mariadb-client state=latest
+        
+      - name: Restart MariaDB
+        service: name=mysql state=restarted
+
+      - name: Configurando a senha de root
+        mysql_user:
+          user=root
+          password="{{mysql_root_password}}"
+          host=localhost
+        ignore_errors: yes
+        
+      - name: Informacao da senha de root
+        debug:
+           msg: "MariaDB root password was set to {{mysql_root_password}}"
+      
+      - name: Delete anonymous users
+        mysql_user:
+         user: ""
+         login_user: root
+         login_password: "{{mysql_root_password}}"
+         login_host: localhost
+         state: absent
+        ignore_errors: yes
+      
+      - name: Remove database de Test
+        mysql_db: 
+         name: test
+         login_user: root
+         login_password: "{{mysql_root_password}}"
+         login_host: localhost
+         state: absent      
+
+######################################
+# Configurando Galera
+######################################
+
+- hosts: galeracluster 
+  become: true  
+  tasks:
+                  
+      - name: Copiando Arquivos Hosts para os no's
+        copy:
+            src: ./hosts
+            dest: /etc
+            mode: 0644
+
+- hosts: node1
+  become: true
+  tasks:
+      - name: Copiando configuracao node1
+        copy:
+            src: ./node1/50-server.cnf
+            dest: /etc/mysql/mariadb.conf.d
+            mode: 0644
+            
+      - name: Iniciar Cluster do Galera node 1
+        shell: galera_new_cluster
+      
+      - name: Restart MariaDB node 1
+        service: name=mysql state=restarted
+
+- hosts: node2
+  become: true
+  tasks:
+      - name: Copiando configuracao node2
+        copy:
+            src: ./node2/50-server.cnf
+            dest: /etc/mysql/mariadb.conf.d
+            mode: 0644
+
+      - name: Restart MariaDB node 2
+        service: name=mysql state=restarted
+
+- hosts: node3
+  become: true
+  tasks:
+      - name: Copiando configuracao node3
+        copy:
+            src: ./node3/50-server.cnf
+            dest: /etc/mysql/mariadb.conf.d
+            mode: 0644
+       
+      - name: Restart MariaDB node 3
+        service: name=mysql state=restarted
+
+#####################################
+# Executa Apenas no node 1 
+#####################################
+- hosts: node1  
+  become: true
+  vars:
+    mysql_root_password: "Password1"
+    db_name: "dbsystem"
+    user_db: "usersystem_rw"
+  tasks:
+        
+      - name: Criando Diretorio do MariaDB
+        file: path=/data/{{item}} state=directory owner=mysql group=mysql recurse=yes
+        with_items:
+         - db
+         - log
+
+      - name: Verificando arquivos em /data/db
+        find:
+         path=/data/db
+         patterns='\*'
+        register: db_files
+
+      - name: Informacao dos arquivos em /data/db
+        debug:
+           msg: "Quantidade de arquivos e': {{db_files}}" 
+
+      - name: Executa o mysql_install_db apenas se /data/db estiver Vazio
+        command: mysql_install_db --datadir=/data/db
+        when: db_files.matched|int == 0
+              
+      - name: Criando o database para aplicacao
+        mysql_db:
+          name: "{{db_name}}"
+          login_user: root
+          login_password: "{{mysql_root_password}}"
+          login_host: localhost
+          state: present
+      
+      - name: Informacao do nome do DB criado
+        debug:
+           msg: "Database Criado com o nome de {{db_name}}"   
+      
+      - name: Criando usuario do DB para aplicacao
+        mysql_user:
+          name: "{{user_db}}"
+          password: "{{mysql_root_password}}"
+          priv: myapp.*:SELECT,INSERT,UPDATE,DELETE
+          login_user: root
+          login_password: "{{mysql_root_password}}"
+          state: present
+         
+      - name: Informacao do nome do usuario e do Banco criado
+        debug:
+           msg: "Usuario Criado com o nome de {{user_db}} e senha {{mysql_root_password}} "   
